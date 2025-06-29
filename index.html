@@ -1,0 +1,704 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GitHub Repository Downloader</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 20px;
+      }
+
+      .container {
+        background: rgba(255, 255, 255, 0.95);
+        backdrop-filter: blur(10px);
+        border-radius: 20px;
+        padding: 40px;
+        box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+        max-width: 600px;
+        width: 100%;
+        text-align: center;
+      }
+
+      .title {
+        color: #333;
+        font-size: 2.5rem;
+        font-weight: 700;
+        margin-bottom: 10px;
+        background: linear-gradient(45deg, #667eea, #764ba2);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+      }
+
+      .subtitle {
+        color: #666;
+        font-size: 1.1rem;
+        margin-bottom: 30px;
+      }
+
+      .input-group {
+        margin-bottom: 20px;
+        text-align: left;
+      }
+
+      label {
+        display: block;
+        margin-bottom: 8px;
+        font-weight: 600;
+        color: #333;
+      }
+
+      input[type="text"] {
+        width: 100%;
+        padding: 15px 20px;
+        border: 2px solid #e1e5e9;
+        border-radius: 12px;
+        font-size: 16px;
+        transition: all 0.3s ease;
+        background: rgba(255, 255, 255, 0.8);
+      }
+
+      input[type="text"]:focus {
+        outline: none;
+        border-color: #667eea;
+        box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        transform: translateY(-2px);
+      }
+
+      .btn {
+        background: linear-gradient(45deg, #667eea, #764ba2);
+        color: white;
+        border: none;
+        padding: 15px 30px;
+        font-size: 16px;
+        font-weight: 600;
+        border-radius: 12px;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        margin: 10px 5px;
+      }
+
+      .btn:hover {
+        transform: translateY(-3px);
+        box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
+      }
+
+      .btn:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+        transform: none;
+      }
+
+      .status {
+        margin-top: 20px;
+        padding: 15px;
+        border-radius: 12px;
+        font-weight: 500;
+        transition: all 0.3s ease;
+      }
+
+      .status.info {
+        background: rgba(102, 126, 234, 0.1);
+        color: #667eea;
+        border: 1px solid rgba(102, 126, 234, 0.2);
+      }
+
+      .status.error {
+        background: rgba(239, 68, 68, 0.1);
+        color: #ef4444;
+        border: 1px solid rgba(239, 68, 68, 0.2);
+      }
+
+      .status.success {
+        background: rgba(34, 197, 94, 0.1);
+        color: #22c55e;
+        border: 1px solid rgba(34, 197, 94, 0.2);
+      }
+
+      .progress-bar {
+        width: 100%;
+        height: 6px;
+        background: rgba(102, 126, 234, 0.2);
+        border-radius: 3px;
+        overflow: hidden;
+        margin-top: 10px;
+      }
+
+      .progress-fill {
+        height: 100%;
+        background: linear-gradient(45deg, #667eea, #764ba2);
+        border-radius: 3px;
+        transition: width 0.3s ease;
+        width: 0%;
+      }
+
+      .file-extensions {
+        margin-top: 20px;
+        text-align: left;
+      }
+
+      .file-extensions h3 {
+        color: #333;
+        margin-bottom: 10px;
+        font-size: 1.1rem;
+      }
+
+      .extensions-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+        gap: 10px;
+        margin-top: 10px;
+      }
+
+      .extension-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .extension-item input[type="checkbox"] {
+        width: 18px;
+        height: 18px;
+        accent-color: #667eea;
+      }
+
+      .extension-item label {
+        margin: 0;
+        font-weight: 500;
+        color: #555;
+        cursor: pointer;
+      }
+
+      .hidden {
+        display: none;
+      }
+
+      .cors-notice {
+        background: rgba(255, 193, 7, 0.1);
+        color: #856404;
+        border: 1px solid rgba(255, 193, 7, 0.2);
+        padding: 15px;
+        border-radius: 12px;
+        margin-bottom: 20px;
+        text-align: left;
+        font-size: 14px;
+      }
+
+      .cors-notice strong {
+        color: #664d03;
+      }
+
+      @keyframes pulse {
+        0%,
+        100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.5;
+        }
+      }
+
+      .loading {
+        animation: pulse 1.5s infinite;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1 class="title">Repo to Text Downloader</h1>
+      <p class="subtitle">
+        Download and compile any GitHub repository into a single text file
+      </p>
+
+      <div class="cors-notice">
+        <strong>Note:</strong> This tool uses a CORS proxy to access GitHub API.
+        If you encounter issues, try using a different network or wait a moment
+        before retrying.
+      </div>
+
+      <div class="input-group">
+        <label for="repoUrl">Repository URL or Username/Repository</label>
+        <input
+          type="text"
+          id="repoUrl"
+          placeholder="e.g., https://github.com/user/repo or user/repo"
+        />
+      </div>
+
+      <div class="file-extensions">
+        <h3>Select File Types to Include:</h3>
+        <div class="extensions-grid">
+          <div class="extension-item">
+            <input type="checkbox" id="js" value="js" checked />
+            <label for="js">JavaScript (.js)</label>
+          </div>
+          <div class="extension-item">
+            <input type="checkbox" id="html" value="html" checked />
+            <label for="html">HTML (.html)</label>
+          </div>
+          <div class="extension-item">
+            <input type="checkbox" id="css" value="css" checked />
+            <label for="css">CSS (.css)</label>
+          </div>
+          <div class="extension-item">
+            <input type="checkbox" id="py" value="py" checked />
+            <label for="py">Python (.py)</label>
+          </div>
+          <div class="extension-item">
+            <input type="checkbox" id="java" value="java" checked />
+            <label for="java">Java (.java)</label>
+          </div>
+          <div class="extension-item">
+            <input type="checkbox" id="cpp" value="cpp" checked />
+            <label for="cpp">C++ (.cpp)</label>
+          </div>
+          <div class="extension-item">
+            <input type="checkbox" id="c" value="c" checked />
+            <label for="c">C (.c)</label>
+          </div>
+          <div class="extension-item">
+            <input type="checkbox" id="php" value="php" checked />
+            <label for="php">PHP (.php)</label>
+          </div>
+          <div class="extension-item">
+            <input type="checkbox" id="rb" value="rb" checked />
+            <label for="rb">Ruby (.rb)</label>
+          </div>
+          <div class="extension-item">
+            <input type="checkbox" id="go" value="go" checked />
+            <label for="go">Go (.go)</label>
+          </div>
+          <div class="extension-item">
+            <input type="checkbox" id="rs" value="rs" checked />
+            <label for="rs">Rust (.rs)</label>
+          </div>
+          <div class="extension-item">
+            <input type="checkbox" id="md" value="md" checked />
+            <label for="md">Markdown (.md)</label>
+          </div>
+          <div class="extension-item">
+            <input type="checkbox" id="json" value="json" checked />
+            <label for="json">JSON (.json)</label>
+          </div>
+          <div class="extension-item">
+            <input type="checkbox" id="xml" value="xml" checked />
+            <label for="xml">XML (.xml)</label>
+          </div>
+          <div class="extension-item">
+            <input type="checkbox" id="yml" value="yml" checked />
+            <label for="yml">YAML (.yml)</label>
+          </div>
+          <div class="extension-item">
+            <input type="checkbox" id="txt" value="txt" checked />
+            <label for="txt">Text (.txt)</label>
+          </div>
+        </div>
+      </div>
+
+      <button class="btn" onclick="downloadRepository()">
+        Download Repository
+      </button>
+
+      <div id="status" class="status hidden"></div>
+      <div id="progressContainer" class="hidden">
+        <div class="progress-bar">
+          <div id="progressFill" class="progress-fill"></div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      // CORS proxy URLs - multiple fallbacks
+      const CORS_PROXIES = [
+        "https://api.allorigins.win/raw?url=",
+        "https://corsproxy.io/?",
+        "https://cors-anywhere.herokuapp.com/",
+        "https://api.codetabs.com/v1/proxy?quest=",
+      ];
+
+      let currentProxyIndex = 0;
+      let currentFiles = [];
+      let processedFiles = 0;
+
+      function showStatus(message, type = "info") {
+        const statusEl = document.getElementById("status");
+        statusEl.textContent = message;
+        statusEl.className = `status ${type}`;
+        statusEl.classList.remove("hidden");
+      }
+
+      function updateProgress(current, total) {
+        const progressContainer = document.getElementById("progressContainer");
+        const progressFill = document.getElementById("progressFill");
+
+        if (total > 0) {
+          progressContainer.classList.remove("hidden");
+          const percentage = (current / total) * 100;
+          progressFill.style.width = `${percentage}%`;
+        } else {
+          progressContainer.classList.add("hidden");
+        }
+      }
+
+      function parseRepoUrl(input) {
+        input = input.trim();
+
+        // Handle full GitHub URLs
+        const githubUrlPattern = /github\.com\/([^\/]+)\/([^\/]+)/;
+        const match = input.match(githubUrlPattern);
+
+        if (match) {
+          return {
+            owner: match[1],
+            repo: match[2].replace(/\.git$/, ""),
+          };
+        }
+
+        // Handle username/repo format
+        const simplePattern = /^([^\/]+)\/([^\/]+)$/;
+        const simpleMatch = input.match(simplePattern);
+
+        if (simpleMatch) {
+          return {
+            owner: simpleMatch[1],
+            repo: simpleMatch[2],
+          };
+        }
+
+        return null;
+      }
+
+      function getSelectedExtensions() {
+        const checkboxes = document.querySelectorAll(
+          '.extension-item input[type="checkbox"]:checked'
+        );
+        return Array.from(checkboxes).map((cb) => cb.value);
+      }
+
+      function shouldIncludeFile(filename, extensions) {
+        if (extensions.length === 0) return true;
+
+        const fileExt = filename.split(".").pop().toLowerCase();
+        return extensions.includes(fileExt);
+      }
+
+      async function fetchWithProxy(url, proxyIndex = 0) {
+        if (proxyIndex >= CORS_PROXIES.length) {
+          throw new Error("All CORS proxies failed");
+        }
+
+        const proxy = CORS_PROXIES[proxyIndex];
+        const proxyUrl = proxy + encodeURIComponent(url);
+
+        try {
+          const response = await fetch(proxyUrl);
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+          }
+          return await response.json();
+        } catch (error) {
+          console.warn(`Proxy ${proxyIndex} failed:`, error.message);
+          // Try next proxy
+          return await fetchWithProxy(url, proxyIndex + 1);
+        }
+      }
+
+      async function fetchFileContentWithProxy(url, proxyIndex = 0) {
+        if (proxyIndex >= CORS_PROXIES.length) {
+          throw new Error("All CORS proxies failed");
+        }
+
+        const proxy = CORS_PROXIES[proxyIndex];
+        const proxyUrl = proxy + encodeURIComponent(url);
+
+        try {
+          const response = await fetch(proxyUrl);
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+          }
+          return await response.text();
+        } catch (error) {
+          console.warn(`Proxy ${proxyIndex} failed:`, error.message);
+          // Try next proxy
+          return await fetchFileContentWithProxy(url, proxyIndex + 1);
+        }
+      }
+
+      async function fetchRepositoryContents(owner, repo, path = "") {
+        const url = `https://api.github.com/repos/${owner}/${repo}/contents/${path}`;
+        return await fetchWithProxy(url);
+      }
+
+      async function getAllFiles(owner, repo, path = "", allFiles = []) {
+        try {
+          const contents = await fetchRepositoryContents(owner, repo, path);
+
+          if (!Array.isArray(contents)) {
+            console.warn("Unexpected response format:", contents);
+            return allFiles;
+          }
+
+          for (const item of contents) {
+            if (item.type === "file") {
+              allFiles.push({
+                name: item.name,
+                path: item.path,
+                download_url: item.download_url,
+                size: item.size,
+              });
+            } else if (item.type === "dir") {
+              await getAllFiles(owner, repo, item.path, allFiles);
+            }
+          }
+        } catch (error) {
+          console.error(`Error fetching contents for path ${path}:`, error);
+          throw error;
+        }
+
+        return allFiles;
+      }
+
+      function generateFolderTree(files) {
+        const tree = {};
+
+        // Build tree structure
+        files.forEach((file) => {
+          const parts = file.path.split("/");
+          let current = tree;
+
+          parts.forEach((part, index) => {
+            if (index === parts.length - 1) {
+              // This is a file
+              if (!current._files) current._files = [];
+              current._files.push({
+                name: part,
+                size: file.size,
+                path: file.path,
+              });
+            } else {
+              // This is a directory
+              if (!current[part]) current[part] = {};
+              current = current[part];
+            }
+          });
+        });
+
+        // Convert tree to string representation
+        function treeToString(node, prefix = "", isLast = true) {
+          let result = "";
+          const entries = Object.keys(node).filter((key) => key !== "_files");
+          const files = node._files || [];
+
+          // Sort directories first, then files
+          entries.sort();
+          files.sort((a, b) => a.name.localeCompare(b.name));
+
+          // Process directories
+          entries.forEach((dir, index) => {
+            const isLastDir =
+              index === entries.length - 1 && files.length === 0;
+            const connector = isLastDir ? "└── " : "├── ";
+            const newPrefix = prefix + (isLastDir ? "    " : "│   ");
+
+            result += prefix + connector + dir + "/\n";
+            result += treeToString(node[dir], newPrefix, isLastDir);
+          });
+
+          // Process files
+          files.forEach((file, index) => {
+            const isLastFile = index === files.length - 1;
+            const connector = isLastFile ? "└── " : "├── ";
+            const sizeStr = file.size ? ` (${formatBytes(file.size)})` : "";
+            result += prefix + connector + file.name + sizeStr + "\n";
+          });
+
+          return result;
+        }
+
+        return treeToString(tree);
+      }
+
+      function formatBytes(bytes) {
+        if (bytes === 0) return "0 B";
+        const k = 1024;
+        const sizes = ["B", "KB", "MB", "GB"];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + " " + sizes[i];
+      }
+
+      function formatFileContent(file, content) {
+        const separator = "=".repeat(80);
+        const header = `FILE: ${file.path}`;
+        const subheader = `SIZE: ${file.size} bytes`;
+
+        return `${separator}\n${header}\n${subheader}\n${separator}\n\n${content}\n\n`;
+      }
+
+      function downloadTextFile(content, filename) {
+        const blob = new Blob([content], { type: "text/plain" });
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+      }
+
+      async function downloadRepository() {
+        const repoInput = document.getElementById("repoUrl").value;
+        const selectedExtensions = getSelectedExtensions();
+
+        if (!repoInput) {
+          showStatus(
+            "Please enter a repository URL or username/repository",
+            "error"
+          );
+          return;
+        }
+
+        const repoInfo = parseRepoUrl(repoInput);
+        if (!repoInfo) {
+          showStatus(
+            "Invalid repository format. Use: username/repository or full GitHub URL",
+            "error"
+          );
+          return;
+        }
+
+        const button = document.querySelector(".btn");
+        button.disabled = true;
+        button.classList.add("loading");
+
+        try {
+          showStatus("Fetching repository structure...", "info");
+
+          // Get all files
+          const allFiles = await getAllFiles(repoInfo.owner, repoInfo.repo);
+
+          // Filter files by selected extensions
+          const filteredFiles = allFiles.filter((file) =>
+            shouldIncludeFile(file.name, selectedExtensions)
+          );
+
+          if (filteredFiles.length === 0) {
+            showStatus(
+              "No files found matching the selected file types",
+              "error"
+            );
+            return;
+          }
+
+          showStatus(
+            `Found ${filteredFiles.length} files. Downloading content...`,
+            "info"
+          );
+
+          let compiledContent = "";
+          compiledContent += `GITHUB REPOSITORY: ${repoInfo.owner}/${repoInfo.repo}\n`;
+          compiledContent += `DOWNLOADED: ${new Date().toISOString()}\n`;
+          compiledContent += `TOTAL FILES: ${filteredFiles.length}\n`;
+          compiledContent += `SELECTED EXTENSIONS: ${selectedExtensions.join(
+            ", "
+          )}\n`;
+          compiledContent += "=".repeat(80) + "\n\n";
+
+          // Generate and add folder tree
+          compiledContent += "FOLDER STRUCTURE:\n";
+          compiledContent += "=".repeat(80) + "\n";
+          compiledContent += `${repoInfo.repo}/\n`;
+          compiledContent += generateFolderTree(filteredFiles);
+          compiledContent += "=".repeat(80) + "\n\n";
+
+          // Download each file
+          processedFiles = 0;
+          for (const file of filteredFiles) {
+            try {
+              showStatus(
+                `Downloading ${file.path} (${processedFiles + 1}/${
+                  filteredFiles.length
+                })`,
+                "info"
+              );
+              updateProgress(processedFiles, filteredFiles.length);
+
+              const content = await fetchFileContentWithProxy(
+                file.download_url
+              );
+              compiledContent += formatFileContent(file, content);
+
+              processedFiles++;
+
+              // Add small delay to avoid rate limiting
+              await new Promise((resolve) => setTimeout(resolve, 100));
+            } catch (error) {
+              console.error(`Error downloading ${file.path}:`, error);
+              compiledContent += formatFileContent(
+                file,
+                `ERROR: Could not download file - ${error.message}`
+              );
+              processedFiles++;
+            }
+          }
+
+          updateProgress(filteredFiles.length, filteredFiles.length);
+
+          // Download the compiled file
+          const filename = `${repoInfo.owner}-${repoInfo.repo}-${
+            new Date().toISOString().split("T")[0]
+          }.txt`;
+          downloadTextFile(compiledContent, filename);
+
+          showStatus(
+            `Successfully downloaded ${processedFiles} files!`,
+            "success"
+          );
+        } catch (error) {
+          console.error("Error:", error);
+          let errorMessage = error.message;
+
+          if (
+            error.message.includes("CORS") ||
+            error.message.includes("fetch")
+          ) {
+            errorMessage =
+              "Network error. Please check your internet connection and try again. The repository might also be private or not exist.";
+          }
+
+          showStatus(`Error: ${errorMessage}`, "error");
+        } finally {
+          button.disabled = false;
+          button.classList.remove("loading");
+          setTimeout(() => {
+            updateProgress(0, 0);
+          }, 2000);
+        }
+      }
+
+      // Allow Enter key to trigger download
+      document
+        .getElementById("repoUrl")
+        .addEventListener("keypress", function (e) {
+          if (e.key === "Enter") {
+            downloadRepository();
+          }
+        });
+    </script>
+  </body>
+</html>
