@@ -1,0 +1,2064 @@
+GITHUB REPOSITORY: debarshee2004/go-api
+DOWNLOADED: 2025-06-29T06:01:59.526Z
+TOTAL FILES: 12
+SELECTED EXTENSIONS: go
+================================================================================
+
+FOLDER STRUCTURE:
+================================================================================
+go-api/
+├── gin/
+│   ├── controllers/
+│   │   └── controller.go (14.4 KB)
+│   ├── db/
+│   │   └── database.go (2.1 KB)
+│   ├── middleware/
+│   │   └── middleware.go (4 KB)
+│   ├── models/
+│   │   └── model.go (2.6 KB)
+│   ├── routes/
+│   │   └── routes.go (1.5 KB)
+│   └── main.go (1.4 KB)
+└── mux/
+    ├── controllers/
+    │   └── controller.go (12.7 KB)
+    ├── db/
+    │   └── database.go (1.9 KB)
+    ├── middleware/
+    │   └── middleware.go (4.3 KB)
+    ├── models/
+    │   └── model.go (2.8 KB)
+    ├── routes/
+    │   └── routes.go (1.7 KB)
+    └── main.go (1.5 KB)
+================================================================================
+
+================================================================================
+FILE: gin/controllers/controller.go
+SIZE: 14761 bytes
+================================================================================
+
+package controllers
+
+import (
+	"database/sql"
+	"fmt"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/debarshee2004/ginapi/db"
+	"github.com/debarshee2004/ginapi/middleware"
+	"github.com/debarshee2004/ginapi/models"
+	"github.com/gin-gonic/gin"
+	"golang.org/x/crypto/bcrypt"
+)
+
+// UserSignup handles user registration
+func UserSignup(c *gin.Context) {
+	var signupReq models.SignupRequest
+	if err := c.ShouldBindJSON(&signupReq); err != nil {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{
+			Error:   "Invalid request",
+			Message: "Failed to parse request body",
+		})
+		return
+	}
+
+	// Validate required fields
+	if signupReq.Email == "" || signupReq.Password == "" || signupReq.Username == "" {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{
+			Error:   "Validation error",
+			Message: "Email, username, and password are required",
+		})
+		return
+	}
+
+	database := db.GetDB()
+
+	// Check if user already exists (check both email and username)
+	var count int
+	err := database.QueryRow("SELECT COUNT(*) FROM users WHERE email = $1 OR username = $2",
+		signupReq.Email, signupReq.Username).Scan(&count)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
+			Error:   "Database error",
+			Message: "Failed to check existing user",
+		})
+		return
+	}
+
+	if count > 0 {
+		c.JSON(http.StatusConflict, models.ErrorResponse{
+			Error:   "User exists",
+			Message: "User with this email or username already exists",
+		})
+		return
+	}
+
+	// Hash password
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(signupReq.Password), bcrypt.DefaultCost)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
+			Error:   "Internal error",
+			Message: "Failed to process password",
+		})
+		return
+	}
+
+	// Set default role if not provided
+	if signupReq.Role == "" {
+		signupReq.Role = "user"
+	}
+
+	// Insert user into database
+	now := time.Now()
+	var userID int
+	err = database.QueryRow(`
+		INSERT INTO users (username, first_name, last_name, email, password, role, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		RETURNING id
+	`, signupReq.Username, signupReq.FirstName, signupReq.LastName, signupReq.Email,
+		string(hashedPassword), signupReq.Role, now, now).Scan(&userID)
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
+			Error:   "Database error",
+			Message: "Failed to create user",
+		})
+		return
+	}
+
+	// Create user object for response
+	user := models.User{
+		ID:        userID,
+		Username:  signupReq.Username,
+		FirstName: signupReq.FirstName,
+		LastName:  signupReq.LastName,
+		Email:     signupReq.Email,
+		Role:      signupReq.Role,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	// Generate tokens
+	token, err := middleware.GenerateJWT(user)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
+			Error:   "Token error",
+			Message: "Failed to generate token",
+		})
+		return
+	}
+
+	refreshToken, err := middleware.GenerateRefreshToken(user)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
+			Error:   "Token error",
+			Message: "Failed to generate refresh token",
+		})
+		return
+	}
+
+	// Return success response
+	c.JSON(http.StatusCreated, models.AuthResponse{
+		Token:        token,
+		RefreshToken: refreshToken,
+		User:         user,
+		Message:      "User created successfully",
+	})
+}
+
+// UserLogin handles user authentication
+func UserLogin(c *gin.Context) {
+	var loginReq models.LoginRequest
+	if err := c.ShouldBindJSON(&loginReq); err != nil {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{
+			Error:   "Invalid request",
+			Message: "Failed to parse request body",
+		})
+		return
+	}
+
+	// Validate required fields
+	if loginReq.Email == "" || loginReq.Password == "" {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{
+			Error:   "Validation error",
+			Message: "Email and password are required",
+		})
+		return
+	}
+
+	// Find user by email
+	database := db.GetDB()
+	var user models.User
+	err := database.QueryRow(`
+		SELECT id, username, first_name, last_name, email, password, role, created_at, updated_at
+		FROM users WHERE email = $1
+	`, loginReq.Email).Scan(&user.ID, &user.Username, &user.FirstName, &user.LastName,
+		&user.Email, &user.Password, &user.Role, &user.CreatedAt, &user.UpdatedAt)
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			c.JSON(http.StatusUnauthorized, models.ErrorResponse{
+				Error:   "Authentication failed",
+				Message: "Invalid email or password",
+			})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
+			Error:   "Database error",
+			Message: "Failed to fetch user",
+		})
+		return
+	}
+
+	// Check password
+	err = bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(loginReq.Password))
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, models.ErrorResponse{
+			Error:   "Authentication failed",
+			Message: "Invalid email or password",
+		})
+		return
+	}
+
+	// Generate tokens
+	token, err := middleware.GenerateJWT(user)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
+			Error:   "Token error",
+			Message: "Failed to generate token",
+		})
+		return
+	}
+
+	refreshToken, err := middleware.GenerateRefreshToken(user)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
+			Error:   "Token error",
+			Message: "Failed to generate refresh token",
+		})
+		return
+	}
+
+	// Don't return password
+	user.Password = ""
+
+	// Return success response
+	c.JSON(http.StatusOK, models.AuthResponse{
+		Token:        token,
+		RefreshToken: refreshToken,
+		User:         user,
+		Message:      "Login successful",
+	})
+}
+
+// UserLogout handles user logout
+func UserLogout(c *gin.Context) {
+	c.JSON(http.StatusOK, models.SuccessResponse{
+		Message: "Logout successful",
+	})
+}
+
+// GetAllUsers retrieves all users (admin only)
+func GetAllUsers(c *gin.Context) {
+	database := db.GetDB()
+
+	rows, err := database.Query(`
+		SELECT id, username, first_name, last_name, email, role, created_at, updated_at
+		FROM users ORDER BY created_at DESC
+	`)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
+			Error:   "Database error",
+			Message: "Failed to fetch users",
+		})
+		return
+	}
+	defer rows.Close()
+
+	var users []models.User
+	for rows.Next() {
+		var user models.User
+		err := rows.Scan(&user.ID, &user.Username, &user.FirstName, &user.LastName,
+			&user.Email, &user.Role, &user.CreatedAt, &user.UpdatedAt)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, models.ErrorResponse{
+				Error:   "Database error",
+				Message: "Failed to decode users",
+			})
+			return
+		}
+		users = append(users, user)
+	}
+
+	// Check for iteration errors
+	if err = rows.Err(); err != nil {
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
+			Error:   "Database error",
+			Message: "Error occurred while reading users",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, models.SuccessResponse{
+		Message: "Users retrieved successfully",
+		Data:    users,
+	})
+}
+
+// GetUserByID retrieves a specific user by ID
+func GetUserByID(c *gin.Context) {
+	userIDStr := c.Param("id")
+	userID, err := strconv.Atoi(userIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{
+			Error:   "Invalid ID",
+			Message: "Invalid user ID format",
+		})
+		return
+	}
+
+	database := db.GetDB()
+	var user models.User
+	err = database.QueryRow(`
+		SELECT id, username, first_name, last_name, email, role, created_at, updated_at
+		FROM users WHERE id = $1
+	`, userID).Scan(&user.ID, &user.Username, &user.FirstName, &user.LastName,
+		&user.Email, &user.Role, &user.CreatedAt, &user.UpdatedAt)
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			c.JSON(http.StatusNotFound, models.ErrorResponse{
+				Error:   "Not found",
+				Message: "User not found",
+			})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
+			Error:   "Database error",
+			Message: "Failed to fetch user",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, models.SuccessResponse{
+		Message: "User retrieved successfully",
+		Data:    user,
+	})
+}
+
+// UpdateUser updates a user's information
+func UpdateUser(c *gin.Context) {
+	userIDStr := c.Param("id")
+	userID, err := strconv.Atoi(userIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{
+			Error:   "Invalid ID",
+			Message: "Invalid user ID format",
+		})
+		return
+	}
+
+	var updateReq models.UserUpdateRequest
+	if err := c.ShouldBindJSON(&updateReq); err != nil {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{
+			Error:   "Invalid request",
+			Message: "Failed to parse request body",
+		})
+		return
+	}
+
+	// Check authorization (users can only update their own profile unless admin)
+	contextUserID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, models.ErrorResponse{
+			Error:   "Unauthorized",
+			Message: "User ID not found in context",
+		})
+		return
+	}
+
+	contextRole, exists := c.Get("role")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, models.ErrorResponse{
+			Error:   "Unauthorized",
+			Message: "User role not found in context",
+		})
+		return
+	}
+
+	// Convert contextUserID to string for comparison
+	var contextUserIDStr string
+	switch v := contextUserID.(type) {
+	case string:
+		contextUserIDStr = v
+	case int:
+		contextUserIDStr = strconv.Itoa(v)
+	default:
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
+			Error:   "Internal error",
+			Message: "Invalid user ID type in context",
+		})
+		return
+	}
+
+	if contextUserIDStr != userIDStr && contextRole.(string) != "admin" {
+		c.JSON(http.StatusForbidden, models.ErrorResponse{
+			Error:   "Forbidden",
+			Message: "You can only update your own profile",
+		})
+		return
+	}
+
+	// Check if there's anything to update
+	if updateReq.Username == "" && updateReq.FirstName == "" && updateReq.LastName == "" &&
+		updateReq.Email == "" && updateReq.Role == "" {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{
+			Error:   "Validation error",
+			Message: "At least one field must be provided for update",
+		})
+		return
+	}
+
+	// Build update query dynamically
+	setParts := []string{"updated_at = $1"}
+	args := []interface{}{time.Now()}
+	argIndex := 2
+
+	if updateReq.Username != "" {
+		setParts = append(setParts, fmt.Sprintf("username = $%d", argIndex))
+		args = append(args, updateReq.Username)
+		argIndex++
+	}
+	if updateReq.FirstName != "" {
+		setParts = append(setParts, fmt.Sprintf("first_name = $%d", argIndex))
+		args = append(args, updateReq.FirstName)
+		argIndex++
+	}
+	if updateReq.LastName != "" {
+		setParts = append(setParts, fmt.Sprintf("last_name = $%d", argIndex))
+		args = append(args, updateReq.LastName)
+		argIndex++
+	}
+	if updateReq.Email != "" {
+		setParts = append(setParts, fmt.Sprintf("email = $%d", argIndex))
+		args = append(args, updateReq.Email)
+		argIndex++
+	}
+	if updateReq.Role != "" && contextRole.(string) == "admin" {
+		setParts = append(setParts, fmt.Sprintf("role = $%d", argIndex))
+		args = append(args, updateReq.Role)
+		argIndex++
+	}
+
+	// Add WHERE clause parameter
+	args = append(args, userID)
+	query := fmt.Sprintf("UPDATE users SET %s WHERE id = $%d",
+		strings.Join(setParts, ", "), argIndex)
+
+	database := db.GetDB()
+	result, err := database.Exec(query, args...)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
+			Error:   "Database error",
+			Message: "Failed to update user",
+		})
+		return
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
+			Error:   "Database error",
+			Message: "Failed to check update result",
+		})
+		return
+	}
+
+	if rowsAffected == 0 {
+		c.JSON(http.StatusNotFound, models.ErrorResponse{
+			Error:   "Not found",
+			Message: "User not found",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, models.SuccessResponse{
+		Message: "User updated successfully",
+	})
+}
+
+// DeleteUser deletes a user (admin only)
+func DeleteUser(c *gin.Context) {
+	userIDStr := c.Param("id")
+	userID, err := strconv.Atoi(userIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{
+			Error:   "Invalid ID",
+			Message: "Invalid user ID format",
+		})
+		return
+	}
+
+	// Prevent admin from deleting themselves
+	contextUserID, exists := c.Get("user_id")
+	if exists {
+		var contextUserIDStr string
+		switch v := contextUserID.(type) {
+		case string:
+			contextUserIDStr = v
+		case int:
+			contextUserIDStr = strconv.Itoa(v)
+		}
+
+		if contextUserIDStr == userIDStr {
+			c.JSON(http.StatusBadRequest, models.ErrorResponse{
+				Error:   "Invalid operation",
+				Message: "You cannot delete your own account",
+			})
+			return
+		}
+	}
+
+	database := db.GetDB()
+	result, err := database.Exec("DELETE FROM users WHERE id = $1", userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
+			Error:   "Database error",
+			Message: "Failed to delete user",
+		})
+		return
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
+			Error:   "Database error",
+			Message: "Failed to check delete result",
+		})
+		return
+	}
+
+	if rowsAffected == 0 {
+		c.JSON(http.StatusNotFound, models.ErrorResponse{
+			Error:   "Not found",
+			Message: "User not found",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, models.SuccessResponse{
+		Message: "User deleted successfully",
+	})
+}
+
+// GetProfile returns the current user's profile
+func GetProfile(c *gin.Context) {
+	contextUserID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, models.ErrorResponse{
+			Error:   "Unauthorized",
+			Message: "User ID not found in context",
+		})
+		return
+	}
+
+	var userID int
+	var err error
+
+	switch v := contextUserID.(type) {
+	case string:
+		userID, err = strconv.Atoi(v)
+	case int:
+		userID = v
+	default:
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
+			Error:   "Internal error",
+			Message: "Invalid user ID type in context",
+		})
+		return
+	}
+
+	if err != nil {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{
+			Error:   "Invalid ID",
+			Message: "Invalid user ID",
+		})
+		return
+	}
+
+	database := db.GetDB()
+	var user models.User
+	err = database.QueryRow(`
+		SELECT id, username, first_name, last_name, email, role, created_at, updated_at
+		FROM users WHERE id = $1
+	`, userID).Scan(&user.ID, &user.Username, &user.FirstName, &user.LastName,
+		&user.Email, &user.Role, &user.CreatedAt, &user.UpdatedAt)
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			c.JSON(http.StatusNotFound, models.ErrorResponse{
+				Error:   "Not found",
+				Message: "User profile not found",
+			})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
+			Error:   "Database error",
+			Message: "Failed to fetch profile",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, models.SuccessResponse{
+		Message: "Profile retrieved successfully",
+		Data:    user,
+	})
+}
+
+
+================================================================================
+FILE: gin/db/database.go
+SIZE: 2107 bytes
+================================================================================
+
+package db
+
+import (
+	"database/sql"
+	"fmt"
+	"log"
+	"os"
+
+	_ "github.com/lib/pq"
+)
+
+var DB *sql.DB
+
+func init() {
+	var err error
+
+	// Get database connection details from environment variables
+	host := os.Getenv("DB_HOST")
+	port := os.Getenv("DB_PORT")
+	user := os.Getenv("DB_USER")
+	password := os.Getenv("DB_PASSWORD")
+	dbname := os.Getenv("DB_NAME")
+	sslmode := os.Getenv("DB_SSLMODE")
+
+	// Set default values if not provided
+	if host == "" {
+		host = "localhost"
+	}
+	if port == "" {
+		port = "5432"
+	}
+	if user == "" {
+		user = "postgres"
+	}
+	if password == "" {
+		password = "password"
+	}
+	if dbname == "" {
+		dbname = "ginapi"
+	}
+	if sslmode == "" {
+		sslmode = "disable"
+	}
+
+	// Build connection string
+	connStr := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
+		host, port, user, password, dbname, sslmode)
+
+	// Open database connection
+	DB, err = sql.Open("postgres", connStr)
+	if err != nil {
+		log.Fatalf("Failed to connect to PostgreSQL: %v", err)
+	}
+
+	// Test the connection
+	err = DB.Ping()
+	if err != nil {
+		log.Fatalf("Failed to ping PostgreSQL: %v", err)
+	}
+
+	fmt.Println("Connected to PostgreSQL successfully!")
+
+	// Create users table if it doesn't exist
+	createUsersTable()
+}
+
+// createUsersTable creates the users table if it doesn't exist
+func createUsersTable() {
+	query := `
+	CREATE TABLE IF NOT EXISTS users (
+		id SERIAL PRIMARY KEY,
+		username VARCHAR(255) UNIQUE NOT NULL,
+		first_name VARCHAR(255),
+		last_name VARCHAR(255),
+		email VARCHAR(255) UNIQUE NOT NULL,
+		password VARCHAR(255) NOT NULL,
+		role VARCHAR(50) DEFAULT 'user',
+		session_id VARCHAR(255),
+		session_token TEXT,
+		refresh_token TEXT,
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+	);
+	`
+
+	_, err := DB.Exec(query)
+	if err != nil {
+		log.Fatalf("Failed to create users table: %v", err)
+	}
+
+	fmt.Println("Users table is ready to use.")
+}
+
+// GetDB returns the database connection
+func GetDB() *sql.DB {
+	return DB
+}
+
+// Close closes the database connection
+func Close() error {
+	if DB != nil {
+		return DB.Close()
+	}
+	return nil
+}
+
+
+================================================================================
+FILE: gin/main.go
+SIZE: 1460 bytes
+================================================================================
+
+package main
+
+import (
+	"fmt"
+	"log"
+	"os"
+
+	"github.com/debarshee2004/ginapi/db"
+	"github.com/debarshee2004/ginapi/routes"
+)
+
+func main() {
+	// Get port from environment or use default
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+
+	// Setup routes
+	router := routes.GetRouter()
+
+	// Start server
+	fmt.Printf("🚀 Gin API Server is running on port %s\n", port)
+	fmt.Printf("📚 API Documentation:\n")
+	fmt.Printf("   Health Check: GET http://localhost:%s/api/v1/health\n", port)
+	fmt.Printf("   User Signup:  POST http://localhost:%s/api/v1/auth/signup\n", port)
+	fmt.Printf("   User Login:   POST http://localhost:%s/api/v1/auth/login\n", port)
+	fmt.Printf("   User Logout:  POST http://localhost:%s/api/v1/auth/logout\n", port)
+	fmt.Printf("   Get Profile:  GET http://localhost:%s/api/v1/profile\n", port)
+	fmt.Printf("   Get All Users: GET http://localhost:%s/api/v1/users (Admin only)\n", port)
+	fmt.Printf("   Get User:     GET http://localhost:%s/api/v1/users/{id}\n", port)
+	fmt.Printf("   Update User:  PUT http://localhost:%s/api/v1/users/{id}\n", port)
+	fmt.Printf("   Delete User:  DELETE http://localhost:%s/api/v1/users/{id} (Admin only)\n", port)
+
+	// Graceful shutdown on exit
+	defer func() {
+		if err := db.Close(); err != nil {
+			log.Printf("Error closing PostgreSQL connection: %v", err)
+		} else {
+			fmt.Println("PostgreSQL connection closed.")
+		}
+	}()
+
+	// Start the HTTP server
+	log.Fatal(router.Run(":" + port))
+}
+
+
+================================================================================
+FILE: gin/middleware/middleware.go
+SIZE: 4147 bytes
+================================================================================
+
+package middleware
+
+import (
+	"fmt"
+	"net/http"
+	"os"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/debarshee2004/ginapi/models"
+	"github.com/gin-gonic/gin"
+	"github.com/golang-jwt/jwt/v4"
+)
+
+var jwtSecret = []byte(getJWTSecret())
+
+func getJWTSecret() string {
+	secret := os.Getenv("JWT_SECRET")
+	if secret == "" {
+		return "your-secret-key" // Default secret, should be changed in production
+	}
+	return secret
+}
+
+// CORS middleware to handle Cross-Origin Resource Sharing
+func CORS() gin.HandlerFunc {
+	return gin.HandlerFunc(func(c *gin.Context) {
+		c.Header("Access-Control-Allow-Origin", "*")
+		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		c.Header("Access-Control-Allow-Credentials", "true")
+
+		if c.Request.Method == "OPTIONS" {
+			c.AbortWithStatus(http.StatusOK)
+			return
+		}
+
+		c.Next()
+	})
+}
+
+// Logger middleware for request logging
+func Logger() gin.HandlerFunc {
+	return gin.LoggerWithFormatter(func(param gin.LogFormatterParams) string {
+		return fmt.Sprintf("[%s] %s %s %s %d %s\n",
+			param.TimeStamp.Format("2006-01-02 15:04:05"),
+			param.Method,
+			param.Path,
+			param.ClientIP,
+			param.StatusCode,
+			param.Latency,
+		)
+	})
+}
+
+// JWTAuth middleware for protecting routes
+func JWTAuth() gin.HandlerFunc {
+	return gin.HandlerFunc(func(c *gin.Context) {
+		authHeader := c.GetHeader("Authorization")
+		if authHeader == "" {
+			c.JSON(http.StatusUnauthorized, models.ErrorResponse{
+				Error:   "Authorization header missing",
+				Message: "Authorization header is required",
+			})
+			c.Abort()
+			return
+		}
+
+		// Extract token from "Bearer <token>"
+		tokenString := strings.TrimPrefix(authHeader, "Bearer ")
+		if tokenString == authHeader {
+			c.JSON(http.StatusUnauthorized, models.ErrorResponse{
+				Error:   "Invalid authorization format",
+				Message: "Authorization header must be in format 'Bearer <token>'",
+			})
+			c.Abort()
+			return
+		}
+
+		// Parse and validate token
+		token, err := jwt.ParseWithClaims(tokenString, &models.JWTClaims{}, func(token *jwt.Token) (interface{}, error) {
+			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+				return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+			}
+			return jwtSecret, nil
+		})
+
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, models.ErrorResponse{
+				Error:   "Invalid token",
+				Message: "Token validation failed",
+			})
+			c.Abort()
+			return
+		}
+
+		if claims, ok := token.Claims.(*models.JWTClaims); ok && token.Valid {
+			// Add user info to context
+			c.Set("user_id", claims.UserID)
+			c.Set("email", claims.Email)
+			c.Set("username", claims.Username)
+			c.Set("role", claims.Role)
+			c.Next()
+		} else {
+			c.JSON(http.StatusUnauthorized, models.ErrorResponse{
+				Error:   "Invalid token claims",
+				Message: "Token claims validation failed",
+			})
+			c.Abort()
+			return
+		}
+	})
+}
+
+// AdminOnly middleware to restrict access to admin users
+func AdminOnly() gin.HandlerFunc {
+	return gin.HandlerFunc(func(c *gin.Context) {
+		role, exists := c.Get("role")
+		if !exists || role != "admin" {
+			c.JSON(http.StatusForbidden, models.ErrorResponse{
+				Error:   "Forbidden",
+				Message: "Admin access required",
+			})
+			c.Abort()
+			return
+		}
+		c.Next()
+	})
+}
+
+// GenerateJWT creates a new JWT token for a user
+func GenerateJWT(user models.User) (string, error) {
+	claims := models.JWTClaims{
+		UserID:   strconv.Itoa(user.ID),
+		Email:    user.Email,
+		Username: user.Username,
+		Role:     user.Role,
+		StandardClaims: jwt.StandardClaims{
+			ExpiresAt: time.Now().Add(time.Hour * 24).Unix(), // 24 hours
+			IssuedAt:  time.Now().Unix(),
+		},
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return token.SignedString(jwtSecret)
+}
+
+// GenerateRefreshToken creates a refresh token
+func GenerateRefreshToken(user models.User) (string, error) {
+	claims := jwt.MapClaims{
+		"user_id": strconv.Itoa(user.ID),
+		"type":    "refresh",
+		"exp":     time.Now().Add(time.Hour * 24 * 7).Unix(), // 7 days
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return token.SignedString(jwtSecret)
+}
+
+
+================================================================================
+FILE: gin/models/model.go
+SIZE: 2629 bytes
+================================================================================
+
+package models
+
+import (
+	"time"
+
+	"github.com/golang-jwt/jwt/v4"
+)
+
+type User struct {
+	ID           int       `json:"id" db:"id"`
+	Username     string    `json:"username" db:"username"`
+	FirstName    string    `json:"first_name" db:"first_name"`
+	LastName     string    `json:"last_name" db:"last_name"`
+	Email        string    `json:"email" db:"email"`
+	Password     string    `json:"password" db:"password"`
+	Role         string    `json:"role" db:"role"`
+	SessionID    string    `json:"session_id,omitempty" db:"session_id"`
+	SessionToken string    `json:"session_token,omitempty" db:"session_token"`
+	RefreshToken string    `json:"refresh_token,omitempty" db:"refresh_token"`
+	CreatedAt    time.Time `json:"created_at" db:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at" db:"updated_at"`
+}
+
+// SignupRequest represents the request body for user signup
+type SignupRequest struct {
+	Username  string `json:"username" db:"username"`
+	FirstName string `json:"first_name" db:"first_name"`
+	LastName  string `json:"last_name" db:"last_name"`
+	Email     string `json:"email" db:"email"`
+	Password  string `json:"password" db:"password"`
+	Role      string `json:"role" db:"role"`
+}
+
+// LoginRequest represents the request body for user login
+type LoginRequest struct {
+	Email    string `json:"email" db:"email"`
+	Password string `json:"password" db:"password"`
+}
+
+// AuthResponse represents the response for authentication
+type AuthResponse struct {
+	Token        string `json:"token"`
+	RefreshToken string `json:"refresh_token"`
+	User         User   `json:"user"`
+	Message      string `json:"message"`
+}
+
+// ErrorResponse represents error response
+type ErrorResponse struct {
+	Error   string `json:"error"`
+	Message string `json:"message"`
+}
+
+// SuccessResponse represents success response
+type SuccessResponse struct {
+	Message string      `json:"message"`
+	Data    interface{} `json:"data,omitempty"`
+}
+
+// UserUpdateRequest represents the request body for user update
+type UserUpdateRequest struct {
+	Username  string `json:"username,omitempty" db:"username"`
+	FirstName string `json:"first_name,omitempty" db:"first_name"`
+	LastName  string `json:"last_name,omitempty" db:"last_name"`
+	Email     string `json:"email,omitempty" db:"email"`
+	Role      string `json:"role,omitempty" db:"role"`
+}
+
+// JWTClaims represents JWT token claims
+type JWTClaims struct {
+	UserID   string `json:"user_id"`
+	Email    string `json:"email"`
+	Username string `json:"username"`
+	Role     string `json:"role"`
+	jwt.StandardClaims
+}
+
+// Valid validates the JWT claims
+func (c JWTClaims) Valid() error {
+	return c.StandardClaims.Valid()
+}
+
+
+================================================================================
+FILE: gin/routes/routes.go
+SIZE: 1494 bytes
+================================================================================
+
+package routes
+
+import (
+	"net/http"
+
+	"github.com/debarshee2004/ginapi/controllers"
+	"github.com/debarshee2004/ginapi/middleware"
+	"github.com/gin-gonic/gin"
+)
+
+// SetupRoutes configures all API routes
+func SetupRoutes() *gin.Engine {
+	// Set Gin mode
+	gin.SetMode(gin.ReleaseMode)
+
+	router := gin.New()
+
+	// Apply global middleware
+	router.Use(middleware.CORS())
+	router.Use(middleware.Logger())
+	router.Use(gin.Recovery())
+
+	// Create API group
+	api := router.Group("/api/v1")
+
+	// Health check endpoint
+	api.GET("/health", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{
+			"status":  "healthy",
+			"message": "API is running",
+		})
+	})
+
+	// Public routes (no authentication required)
+	auth := api.Group("/auth")
+	{
+		auth.POST("/signup", controllers.UserSignup)
+		auth.POST("/login", controllers.UserLogin)
+	}
+
+	// Protected routes (authentication required)
+	protected := api.Group("")
+	protected.Use(middleware.JWTAuth())
+	{
+		// User profile routes
+		protected.POST("/auth/logout", controllers.UserLogout)
+		protected.GET("/profile", controllers.GetProfile)
+		protected.GET("/users/:id", controllers.GetUserByID)
+		protected.PUT("/users/:id", controllers.UpdateUser)
+	}
+
+	// Admin only routes
+	admin := protected.Group("")
+	admin.Use(middleware.AdminOnly())
+	{
+		admin.GET("/users", controllers.GetAllUsers)
+		admin.DELETE("/users/:id", controllers.DeleteUser)
+	}
+
+	return router
+}
+
+// GetRouter returns the configured router
+func GetRouter() *gin.Engine {
+	return SetupRoutes()
+}
+
+
+================================================================================
+FILE: mux/controllers/controller.go
+SIZE: 12988 bytes
+================================================================================
+
+package controllers
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"time"
+
+	"github.com/debarshee2004/mongoapi/db"
+	"github.com/debarshee2004/mongoapi/middleware"
+	"github.com/debarshee2004/mongoapi/models"
+	"github.com/gorilla/mux"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo"
+	"golang.org/x/crypto/bcrypt"
+)
+
+// UserSignup handles user registration
+func UserSignup(w http.ResponseWriter, r *http.Request) {
+	var signupReq models.SignupRequest
+	if err := json.NewDecoder(r.Body).Decode(&signupReq); err != nil {
+		response := models.ErrorResponse{
+			Error:   "Invalid request",
+			Message: "Failed to parse request body",
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	// Validate required fields
+	if signupReq.Email == "" || signupReq.Password == "" || signupReq.Username == "" {
+		response := models.ErrorResponse{
+			Error:   "Validation error",
+			Message: "Email, username, and password are required",
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	// Check if user already exists
+	collection := db.GetUserCollection()
+	var existingUser models.User
+	err := collection.FindOne(context.TODO(), bson.M{"email": signupReq.Email}).Decode(&existingUser)
+	if err == nil {
+		response := models.ErrorResponse{
+			Error:   "User exists",
+			Message: "User with this email already exists",
+		}
+		w.WriteHeader(http.StatusConflict)
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	// Hash password
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(signupReq.Password), bcrypt.DefaultCost)
+	if err != nil {
+		response := models.ErrorResponse{
+			Error:   "Internal error",
+			Message: "Failed to process password",
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	// Set default role if not provided
+	if signupReq.Role == "" {
+		signupReq.Role = "user"
+	}
+
+	// Create new user
+	user := models.User{
+		Username:  signupReq.Username,
+		FirstName: signupReq.FirstName,
+		LastName:  signupReq.LastName,
+		Email:     signupReq.Email,
+		Password:  string(hashedPassword),
+		Role:      signupReq.Role,
+		CreatedAt: primitive.NewDateTimeFromTime(time.Now()),
+		UpdatedAt: primitive.NewDateTimeFromTime(time.Now()),
+	}
+
+	// Insert user into database
+	result, err := collection.InsertOne(context.TODO(), user)
+	if err != nil {
+		response := models.ErrorResponse{
+			Error:   "Database error",
+			Message: "Failed to create user",
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	// Set the ID from the insert result
+	user.ID = result.InsertedID.(primitive.ObjectID)
+	user.Password = "" // Don't return password
+
+	// Generate tokens
+	token, err := middleware.GenerateJWT(user)
+	if err != nil {
+		response := models.ErrorResponse{
+			Error:   "Token error",
+			Message: "Failed to generate token",
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	refreshToken, err := middleware.GenerateRefreshToken(user)
+	if err != nil {
+		response := models.ErrorResponse{
+			Error:   "Token error",
+			Message: "Failed to generate refresh token",
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	// Return success response
+	authResponse := models.AuthResponse{
+		Token:        token,
+		RefreshToken: refreshToken,
+		User:         user,
+		Message:      "User created successfully",
+	}
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(authResponse)
+}
+
+// UserLogin handles user authentication
+func UserLogin(w http.ResponseWriter, r *http.Request) {
+	var loginReq models.LoginRequest
+	if err := json.NewDecoder(r.Body).Decode(&loginReq); err != nil {
+		response := models.ErrorResponse{
+			Error:   "Invalid request",
+			Message: "Failed to parse request body",
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	// Validate required fields
+	if loginReq.Email == "" || loginReq.Password == "" {
+		response := models.ErrorResponse{
+			Error:   "Validation error",
+			Message: "Email and password are required",
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	// Find user by email
+	collection := db.GetUserCollection()
+	var user models.User
+	err := collection.FindOne(context.TODO(), bson.M{"email": loginReq.Email}).Decode(&user)
+	if err != nil {
+		response := models.ErrorResponse{
+			Error:   "Authentication failed",
+			Message: "Invalid email or password",
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	// Check password
+	err = bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(loginReq.Password))
+	if err != nil {
+		response := models.ErrorResponse{
+			Error:   "Authentication failed",
+			Message: "Invalid email or password",
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	// Generate tokens
+	token, err := middleware.GenerateJWT(user)
+	if err != nil {
+		response := models.ErrorResponse{
+			Error:   "Token error",
+			Message: "Failed to generate token",
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	refreshToken, err := middleware.GenerateRefreshToken(user)
+	if err != nil {
+		response := models.ErrorResponse{
+			Error:   "Token error",
+			Message: "Failed to generate refresh token",
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	// Don't return password
+	user.Password = ""
+
+	// Return success response
+	authResponse := models.AuthResponse{
+		Token:        token,
+		RefreshToken: refreshToken,
+		User:         user,
+		Message:      "Login successful",
+	}
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(authResponse)
+}
+
+// UserLogout handles user logout (invalidate token on client side)
+func UserLogout(w http.ResponseWriter, r *http.Request) {
+	response := models.SuccessResponse{
+		Message: "Logout successful",
+	}
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(response)
+}
+
+// GetAllUsers retrieves all users (admin only)
+func GetAllUsers(w http.ResponseWriter, r *http.Request) {
+	collection := db.GetUserCollection()
+
+	cursor, err := collection.Find(context.TODO(), bson.M{})
+	if err != nil {
+		response := models.ErrorResponse{
+			Error:   "Database error",
+			Message: "Failed to fetch users",
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+	defer cursor.Close(context.TODO())
+
+	var users []models.User
+	if err = cursor.All(context.TODO(), &users); err != nil {
+		response := models.ErrorResponse{
+			Error:   "Database error",
+			Message: "Failed to decode users",
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	// Remove passwords from response
+	for i := range users {
+		users[i].Password = ""
+	}
+
+	response := models.SuccessResponse{
+		Message: "Users retrieved successfully",
+		Data:    users,
+	}
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(response)
+}
+
+// GetUserByID retrieves a specific user by ID
+func GetUserByID(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	userID := vars["id"]
+
+	objectID, err := primitive.ObjectIDFromHex(userID)
+	if err != nil {
+		response := models.ErrorResponse{
+			Error:   "Invalid ID",
+			Message: "Invalid user ID format",
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	collection := db.GetUserCollection()
+	var user models.User
+	err = collection.FindOne(context.TODO(), bson.M{"_id": objectID}).Decode(&user)
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			response := models.ErrorResponse{
+				Error:   "Not found",
+				Message: "User not found",
+			}
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(response)
+			return
+		}
+		response := models.ErrorResponse{
+			Error:   "Database error",
+			Message: "Failed to fetch user",
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	// Remove password from response
+	user.Password = ""
+
+	response := models.SuccessResponse{
+		Message: "User retrieved successfully",
+		Data:    user,
+	}
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(response)
+}
+
+// UpdateUser updates a user's information
+func UpdateUser(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	userID := vars["id"]
+
+	objectID, err := primitive.ObjectIDFromHex(userID)
+	if err != nil {
+		response := models.ErrorResponse{
+			Error:   "Invalid ID",
+			Message: "Invalid user ID format",
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	var updateReq models.UserUpdateRequest
+	if err := json.NewDecoder(r.Body).Decode(&updateReq); err != nil {
+		response := models.ErrorResponse{
+			Error:   "Invalid request",
+			Message: "Failed to parse request body",
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	// Check authorization (users can only update their own profile unless admin)
+	contextUserID := r.Context().Value("user_id").(string)
+	contextRole := r.Context().Value("role").(string)
+
+	if contextUserID != userID && contextRole != "admin" {
+		response := models.ErrorResponse{
+			Error:   "Forbidden",
+			Message: "You can only update your own profile",
+		}
+		w.WriteHeader(http.StatusForbidden)
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	// Build update document
+	updateDoc := bson.M{"updated_at": primitive.NewDateTimeFromTime(time.Now())}
+	if updateReq.Username != "" {
+		updateDoc["username"] = updateReq.Username
+	}
+	if updateReq.FirstName != "" {
+		updateDoc["first_name"] = updateReq.FirstName
+	}
+	if updateReq.LastName != "" {
+		updateDoc["last_name"] = updateReq.LastName
+	}
+	if updateReq.Email != "" {
+		updateDoc["email"] = updateReq.Email
+	}
+	if updateReq.Role != "" && contextRole == "admin" {
+		updateDoc["role"] = updateReq.Role
+	}
+
+	collection := db.GetUserCollection()
+	result, err := collection.UpdateOne(
+		context.TODO(),
+		bson.M{"_id": objectID},
+		bson.M{"$set": updateDoc},
+	)
+
+	if err != nil {
+		response := models.ErrorResponse{
+			Error:   "Database error",
+			Message: "Failed to update user",
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	if result.MatchedCount == 0 {
+		response := models.ErrorResponse{
+			Error:   "Not found",
+			Message: "User not found",
+		}
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	response := models.SuccessResponse{
+		Message: "User updated successfully",
+	}
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(response)
+}
+
+// DeleteUser deletes a user (admin only)
+func DeleteUser(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	userID := vars["id"]
+
+	objectID, err := primitive.ObjectIDFromHex(userID)
+	if err != nil {
+		response := models.ErrorResponse{
+			Error:   "Invalid ID",
+			Message: "Invalid user ID format",
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	collection := db.GetUserCollection()
+	result, err := collection.DeleteOne(context.TODO(), bson.M{"_id": objectID})
+	if err != nil {
+		response := models.ErrorResponse{
+			Error:   "Database error",
+			Message: "Failed to delete user",
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	if result.DeletedCount == 0 {
+		response := models.ErrorResponse{
+			Error:   "Not found",
+			Message: "User not found",
+		}
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	response := models.SuccessResponse{
+		Message: "User deleted successfully",
+	}
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(response)
+}
+
+// GetProfile returns the current user's profile
+func GetProfile(w http.ResponseWriter, r *http.Request) {
+	userID := r.Context().Value("user_id").(string)
+
+	objectID, err := primitive.ObjectIDFromHex(userID)
+	if err != nil {
+		response := models.ErrorResponse{
+			Error:   "Invalid ID",
+			Message: "Invalid user ID",
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	collection := db.GetUserCollection()
+	var user models.User
+	err = collection.FindOne(context.TODO(), bson.M{"_id": objectID}).Decode(&user)
+	if err != nil {
+		response := models.ErrorResponse{
+			Error:   "Database error",
+			Message: "Failed to fetch profile",
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	// Remove password from response
+	user.Password = ""
+
+	response := models.SuccessResponse{
+		Message: "Profile retrieved successfully",
+		Data:    user,
+	}
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(response)
+}
+
+
+================================================================================
+FILE: mux/db/database.go
+SIZE: 1908 bytes
+================================================================================
+
+package db
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"os"
+	"time"
+
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
+)
+
+var connectionString string = os.Getenv("MONGO_URI")
+
+const databaseName string = "mongodb"
+const userCollectionName string = "users"
+
+var UserCollection *mongo.Collection
+var Client *mongo.Client
+
+func init() {
+	// Set default connection string if not provided
+	if connectionString == "" {
+		connectionString = "mongodb://localhost:27017"
+		log.Println("Warning: MONGO_URI not set, using default: mongodb://localhost:27017")
+	}
+
+	// client options
+	clientOption := options.Client().ApplyURI(connectionString)
+	clientOption.SetMaxPoolSize(10)
+	clientOption.SetMinPoolSize(2)
+	clientOption.SetMaxConnIdleTime(30 * time.Second)
+
+	// connect to MongoDB
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	client, err := mongo.Connect(ctx, clientOption)
+	if err != nil {
+		log.Fatalf("Failed to connect to MongoDB: %v", err)
+	}
+
+	// Test the connection
+	err = client.Ping(ctx, nil)
+	if err != nil {
+		log.Fatalf("Failed to ping MongoDB: %v", err)
+	}
+
+	fmt.Println("Connected to MongoDB successfully!")
+
+	// Set global client
+	Client = client
+
+	// collection instance
+	UserCollection = client.Database(databaseName).Collection(userCollectionName)
+	if UserCollection == nil {
+		log.Fatalf("Failed to get collection: %s", userCollectionName)
+	}
+
+	fmt.Printf("Collection instance %s is ready to use.\n", userCollectionName)
+}
+
+// GetUserCollection returns the user collection
+func GetUserCollection() *mongo.Collection {
+	return UserCollection
+}
+
+// GetClient returns the MongoDB client
+func GetClient() *mongo.Client {
+	return Client
+}
+
+// Disconnect closes the MongoDB connection
+func Disconnect() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return Client.Disconnect(ctx)
+}
+
+
+================================================================================
+FILE: mux/main.go
+SIZE: 1492 bytes
+================================================================================
+
+package main
+
+import (
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+
+	"github.com/debarshee2004/mongoapi/db"
+	"github.com/debarshee2004/mongoapi/routes"
+)
+
+func main() {
+	// Get port from environment or use default
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+
+	// Setup routes
+	router := routes.GetRouter()
+
+	// Start server
+	fmt.Printf("🚀 Mongo API Server is running on port %s\n", port)
+	fmt.Printf("📚 API Documentation:\n")
+	fmt.Printf("   Health Check: GET http://localhost:%s/api/v1/health\n", port)
+	fmt.Printf("   User Signup:  POST http://localhost:%s/api/v1/auth/signup\n", port)
+	fmt.Printf("   User Login:   POST http://localhost:%s/api/v1/auth/login\n", port)
+	fmt.Printf("   User Logout:  POST http://localhost:%s/api/v1/auth/logout\n", port)
+	fmt.Printf("   Get Profile:  GET http://localhost:%s/api/v1/profile\n", port)
+	fmt.Printf("   Get All Users: GET http://localhost:%s/api/v1/users (Admin only)\n", port)
+	fmt.Printf("   Get User:     GET http://localhost:%s/api/v1/users/{id}\n", port)
+	fmt.Printf("   Update User:  PUT http://localhost:%s/api/v1/users/{id}\n", port)
+	fmt.Printf("   Delete User:  DELETE http://localhost:%s/api/v1/users/{id} (Admin only)\n", port)
+
+	// Graceful shutdown on exit
+	defer func() {
+		if err := db.Disconnect(); err != nil {
+			log.Printf("Error disconnecting from MongoDB: %v", err)
+		} else {
+			fmt.Println("MongoDB connection closed.")
+		}
+	}()
+
+	// Start the HTTP server
+	log.Fatal(http.ListenAndServe(":"+port, router))
+}
+
+
+================================================================================
+FILE: mux/middleware/middleware.go
+SIZE: 4354 bytes
+================================================================================
+
+package middleware
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/debarshee2004/mongoapi/models"
+	"github.com/dgrijalva/jwt-go"
+)
+
+var jwtSecret = []byte(getJWTSecret())
+
+func getJWTSecret() string {
+	secret := os.Getenv("JWT_SECRET")
+	if secret == "" {
+		return "your-secret-key" // Default secret, should be changed in production
+	}
+	return secret
+}
+
+// CORS middleware to handle Cross-Origin Resource Sharing
+func CORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		w.Header().Set("Access-Control-Allow-Credentials", "true")
+
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+// ContentType middleware to set JSON content type
+func ContentType(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		next.ServeHTTP(w, r)
+	})
+}
+
+// Logger middleware for request logging
+func Logger(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		next.ServeHTTP(w, r)
+		fmt.Printf("[%s] %s %s %v\n",
+			start.Format("2006-01-02 15:04:05"),
+			r.Method,
+			r.URL.Path,
+			time.Since(start))
+	})
+}
+
+// JWTAuth middleware for protecting routes
+func JWTAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authHeader := r.Header.Get("Authorization")
+		if authHeader == "" {
+			http.Error(w, `{"error": "Authorization header missing"}`, http.StatusUnauthorized)
+			return
+		}
+
+		// Extract token from "Bearer <token>"
+		tokenString := strings.TrimPrefix(authHeader, "Bearer ")
+		if tokenString == authHeader {
+			http.Error(w, `{"error": "Invalid authorization format"}`, http.StatusUnauthorized)
+			return
+		}
+
+		// Parse and validate token
+		token, err := jwt.ParseWithClaims(tokenString, &models.JWTClaims{}, func(token *jwt.Token) (interface{}, error) {
+			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+				return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+			}
+			return jwtSecret, nil
+		})
+
+		if err != nil {
+			http.Error(w, `{"error": "Invalid token"}`, http.StatusUnauthorized)
+			return
+		}
+
+		if claims, ok := token.Claims.(*models.JWTClaims); ok && token.Valid {
+			// Add user info to request context
+			ctx := context.WithValue(r.Context(), "user_id", claims.UserID)
+			ctx = context.WithValue(ctx, "email", claims.Email)
+			ctx = context.WithValue(ctx, "username", claims.Username)
+			ctx = context.WithValue(ctx, "role", claims.Role)
+
+			next.ServeHTTP(w, r.WithContext(ctx))
+		} else {
+			http.Error(w, `{"error": "Invalid token claims"}`, http.StatusUnauthorized)
+			return
+		}
+	})
+}
+
+// AdminOnly middleware to restrict access to admin users
+func AdminOnly(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		role := r.Context().Value("role")
+		if role != "admin" {
+			response := models.ErrorResponse{
+				Error:   "Forbidden",
+				Message: "Admin access required",
+			}
+			w.WriteHeader(http.StatusForbidden)
+			json.NewEncoder(w).Encode(response)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// GenerateJWT creates a new JWT token for a user
+func GenerateJWT(user models.User) (string, error) {
+	claims := models.JWTClaims{
+		UserID:   user.ID.Hex(),
+		Email:    user.Email,
+		Username: user.Username,
+		Role:     user.Role,
+		StandardClaims: jwt.StandardClaims{
+			ExpiresAt: time.Now().Add(time.Hour * 24).Unix(), // 24 hours
+			IssuedAt:  time.Now().Unix(),
+		},
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return token.SignedString(jwtSecret)
+}
+
+// GenerateRefreshToken creates a refresh token
+func GenerateRefreshToken(user models.User) (string, error) {
+	claims := jwt.MapClaims{
+		"user_id": user.ID.Hex(),
+		"type":    "refresh",
+		"exp":     time.Now().Add(time.Hour * 24 * 7).Unix(), // 7 days
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return token.SignedString(jwtSecret)
+}
+
+
+================================================================================
+FILE: mux/models/model.go
+SIZE: 2914 bytes
+================================================================================
+
+package models
+
+import (
+	"github.com/dgrijalva/jwt-go"
+	"go.mongodb.org/mongo-driver/bson/primitive"
+)
+
+type User struct {
+	ID           primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	Username     string             `bson:"username" json:"username"`
+	FirstName    string             `bson:"first_name" json:"first_name"`
+	LastName     string             `bson:"last_name" json:"last_name"`
+	Email        string             `bson:"email" json:"email"`
+	Password     string             `bson:"password" json:"password"`
+	Role         string             `bson:"role" json:"role"`
+	SessionID    string             `bson:"session_id,omitempty" json:"session_id,omitempty"`
+	SessionToken string             `bson:"session_token,omitempty" json:"session_token,omitempty"`
+	RefreshToken string             `bson:"refresh_token,omitempty" json:"refresh_token,omitempty"`
+	CreatedAt    primitive.DateTime `bson:"created_at" json:"created_at"`
+	UpdatedAt    primitive.DateTime `bson:"updated_at" json:"updated_at"`
+}
+
+// SignupRequest represents the request body for user signup
+type SignupRequest struct {
+	Username  string `json:"username" bson:"username"`
+	FirstName string `json:"first_name" bson:"first_name"`
+	LastName  string `json:"last_name" bson:"last_name"`
+	Email     string `json:"email" bson:"email"`
+	Password  string `json:"password" bson:"password"`
+	Role      string `json:"role" bson:"role"`
+}
+
+// LoginRequest represents the request body for user login
+type LoginRequest struct {
+	Email    string `json:"email" bson:"email"`
+	Password string `json:"password" bson:"password"`
+}
+
+// AuthResponse represents the response for authentication
+type AuthResponse struct {
+	Token        string `json:"token"`
+	RefreshToken string `json:"refresh_token"`
+	User         User   `json:"user"`
+	Message      string `json:"message"`
+}
+
+// ErrorResponse represents error response
+type ErrorResponse struct {
+	Error   string `json:"error"`
+	Message string `json:"message"`
+}
+
+// SuccessResponse represents success response
+type SuccessResponse struct {
+	Message string      `json:"message"`
+	Data    interface{} `json:"data,omitempty"`
+}
+
+// UserUpdateRequest represents the request body for user update
+type UserUpdateRequest struct {
+	Username  string `json:"username,omitempty" bson:"username,omitempty"`
+	FirstName string `json:"first_name,omitempty" bson:"first_name,omitempty"`
+	LastName  string `json:"last_name,omitempty" bson:"last_name,omitempty"`
+	Email     string `json:"email,omitempty" bson:"email,omitempty"`
+	Role      string `json:"role,omitempty" bson:"role,omitempty"`
+}
+
+// JWTClaims represents JWT token claims
+type JWTClaims struct {
+	UserID   string `json:"user_id"`
+	Email    string `json:"email"`
+	Username string `json:"username"`
+	Role     string `json:"role"`
+	jwt.StandardClaims
+}
+
+// Valid validates the JWT claims
+func (c JWTClaims) Valid() error {
+	return c.StandardClaims.Valid()
+}
+
+
+================================================================================
+FILE: mux/routes/routes.go
+SIZE: 1735 bytes
+================================================================================
+
+package routes
+
+import (
+	"net/http"
+
+	"github.com/debarshee2004/mongoapi/controllers"
+	"github.com/debarshee2004/mongoapi/middleware"
+	"github.com/gorilla/mux"
+)
+
+// SetupRoutes configures all API routes
+func SetupRoutes() *mux.Router {
+	router := mux.NewRouter()
+
+	// Apply global middleware
+	router.Use(middleware.CORS)
+	router.Use(middleware.ContentType)
+	router.Use(middleware.Logger)
+
+	// Create API subrouter
+	api := router.PathPrefix("/api/v1").Subrouter()
+
+	// Health check endpoint
+	api.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status": "healthy", "message": "API is running"}`))
+	}).Methods("GET")
+
+	// Public routes (no authentication required)
+	auth := api.PathPrefix("/auth").Subrouter()
+	auth.HandleFunc("/signup", controllers.UserSignup).Methods("POST")
+	auth.HandleFunc("/login", controllers.UserLogin).Methods("POST")
+
+	// Protected routes (authentication required)
+	protected := api.PathPrefix("").Subrouter()
+	protected.Use(middleware.JWTAuth)
+
+	// User profile routes
+	protected.HandleFunc("/auth/logout", controllers.UserLogout).Methods("POST")
+	protected.HandleFunc("/profile", controllers.GetProfile).Methods("GET")
+	protected.HandleFunc("/users/{id}", controllers.GetUserByID).Methods("GET")
+	protected.HandleFunc("/users/{id}", controllers.UpdateUser).Methods("PUT")
+
+	// Admin only routes
+	admin := protected.PathPrefix("").Subrouter()
+	admin.Use(middleware.AdminOnly)
+	admin.HandleFunc("/users", controllers.GetAllUsers).Methods("GET")
+	admin.HandleFunc("/users/{id}", controllers.DeleteUser).Methods("DELETE")
+
+	return router
+}
+
+// GetRouter returns the configured router
+func GetRouter() *mux.Router {
+	return SetupRoutes()
+}
