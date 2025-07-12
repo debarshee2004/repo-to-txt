@@ -18,7 +18,7 @@
             <section class="card repo-input-section">
                 <h2><i class="fas fa-link"></i> Repository URL</h2>
                 <div class="repo-input">
-                    <input type="text" id="repo-url" placeholder="e.g., https://github.com/owner/repo">
+                    <input type="text" id="repo-url" placeholder="e.g., https://github.com/owner/repo" aria-label="Repository URL">
                     <button id="fetch-repo-btn">Fetch Files</button>
                 </div>
             </section>
@@ -27,9 +27,9 @@
                 <section class="card file-explorer-section">
                     <h2><i class="fas fa-folder-open"></i> File Explorer</h2>
                     <div class="file-filter">
-                        <input type="text" id="extension-filter" placeholder="Filter by extensions: .js, .md">
+                        <input type="text" id="extension-filter" placeholder="Filter by extensions: .js, .md" aria-label="Filter by file extension">
                     </div>
-                    <div id="file-tree">
+                    <div id="file-tree" role="tree" aria-label="File list of the repository">
                         <p class="placeholder">Repository files will appear here...</p>
                     </div>
                 </section>
@@ -37,7 +37,7 @@
                 <section class="card actions-section">
                     <h2><i class="fas fa-cogs"></i> Actions</h2>
                     <button id="consolidate-btn" class="button-primary">Consolidate & Download</button>
-                    <a id="download-link" class="button-secondary" style="display: none;"></a>
+                    <a id="download-link" class="button-secondary" style="display: none;" aria-label="Download consolidated file"></a>
                 </section>
             </div>
         </main>

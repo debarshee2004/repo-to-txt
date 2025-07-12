@@ -286,8 +286,19 @@ function triggerDownload(content) {
     downloadLink.style.display = 'inline-block';
     downloadLink.textContent = `Download Consolidated File`;
 
-    // Instead of a programmatic click, we make the link visible and prompt the user.
-    alert('Consolidation complete. Click the download link to save your file.');
+    // Programmatically click the link to trigger the download
+    downloadLink.click();
+
+    // Optionally, hide the link again after triggering the download
+    // downloadLink.style.display = 'none';
+
+    // It's good practice to revoke the object URL after the download has started
+    // to free up resources, though modern browsers are good at this.
+    // setTimeout(() => URL.revokeObjectURL(url), 100); // Delay to ensure download starts
+
+    // Remove the alert as the download will start automatically
+    // alert('Consolidation complete. Click the download link to save your file.');
+    console.log("Download triggered programmatically.");
 }
 
 
