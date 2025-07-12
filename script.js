@@ -12,13 +12,13 @@ let ghToken = '';
 let currentRepoInfo = {};
 
 function openTab(evt, tabName) {
-    let i, tabcontent, tablinks;
+    var i, tabcontent, tablinks;
     tabcontent = document.getElementsByClassName("tab-content");
-    for (let i = 0; i < tabcontent.length; i++) {
+    for (i = 0; i < tabcontent.length; i++) {
         tabcontent[i].style.display = "none";
     }
     tablinks = document.getElementsByClassName("tab-link");
-    for (let i = 0; i < tablinks.length; i++) {
+    for (i = 0; i < tablinks.length; i++) {
         tablinks[i].className = tablinks[i].className.replace(" active", "");
     }
     document.getElementById(tabName).style.display = "block";
@@ -27,19 +27,23 @@ function openTab(evt, tabName) {
 
 
 async function fetchRepository() {
+    console.log("Attempting to fetch repository...");
     const repoUrl = document.getElementById('repo-url').value.trim();
     if (!repoUrl) {
         alert('Please enter a GitHub repository URL.');
+        console.error("No repository URL provided.");
         return;
     }
 
     const { owner, repo } = parseRepoUrl(repoUrl);
     if (!owner || !repo) {
         alert('Invalid GitHub repository URL.');
+        console.error("Invalid repository URL:", repoUrl);
         return;
     }
 
     currentRepoInfo = { owner, repo };
+    console.log("Fetching for:", currentRepoInfo);
 
     const apiUrl = `https://api.github.com/repos/${owner}/${repo}/git/trees/main?recursive=1`;
 
@@ -47,6 +51,7 @@ async function fetchRepository() {
 
     try {
         const headers = ghToken ? { 'Authorization': `token ${ghToken}` } : {};
+        console.log("Fetching tree with headers:", headers);
         const response = await fetch(apiUrl, { headers });
 
         if (!response.ok) {
@@ -54,11 +59,13 @@ async function fetchRepository() {
         }
 
         const data = await response.json();
+        console.log("Repository tree data received:", data);
         if (data.truncated) {
             alert('Warning: The repository is too large and the file list has been truncated. Some files may not be displayed.');
         }
         displayFileTree(data.tree, owner, repo);
         updateHistory(repoUrl);
+        console.log("Repository fetch successful.");
     } catch (error) {
         console.error('Error fetching repository:', error);
         alert('Failed to fetch repository. Check the URL, ensure the repository is public, or provide a valid API key for private repositories.');
@@ -155,14 +162,6 @@ function createTreeElement(node, owner, repo) {
     return ul;
 }
 
-// Debounce utility function
-function debounce(func, delay) {
-    let timeout;
-    return function (...args) {
-        clearTimeout(timeout);
-        timeout = setTimeout(() => func.apply(this, args), delay);
-    };
-}
 function filterFileTree() {
     const filterText = document.getElementById('extension-filter').value.toLowerCase();
     const extensions = filterText.split(',').map(ext => ext.trim()).filter(ext => ext);
@@ -185,6 +184,7 @@ function filterFileTree() {
 }
 
 async function consolidateFiles() {
+    console.log("Starting file consolidation...");
     const selectedFiles = [];
     document.querySelectorAll('#file-tree input[type="checkbox"]:checked').forEach(checkbox => {
         if (checkbox.dataset.path && checkbox.dataset.type === 'blob') {
@@ -194,8 +194,11 @@ async function consolidateFiles() {
 
     if (selectedFiles.length === 0) {
         alert('Please select at least one file.');
+        console.warn("No files selected for consolidation.");
         return;
     }
+
+    console.log("Selected files:", selectedFiles);
 
     showLoader(true, 'consolidate-btn', 'Consolidating...');
 
@@ -209,12 +212,14 @@ async function consolidateFiles() {
                 'Accept': 'application/vnd.github.v3.raw',
                 ...(ghToken && { 'Authorization': `token ${ghToken}` })
             };
+            console.log(`Fetching content for ${filePath} with headers:`, headers);
             const response = await fetch(fileUrl, { headers });
-            if (!response.ok) throw new Error(`Failed to fetch ${filePath}`);
+            if (!response.ok) throw new Error(`Failed to fetch ${filePath}, status: ${response.status}`);
 
             const content = await response.text();
             consolidatedContent += `\n\n--- File: ${filePath} ---\n\n`;
             consolidatedContent += content;
+            console.log(`Successfully fetched and appended content for ${filePath}`);
         } catch (error) {
             console.error('Error fetching file content:', error);
             consolidatedContent += `\n\n--- File: ${filePath} (Error: Could not fetch content) ---\n\n`;
@@ -222,6 +227,7 @@ async function consolidateFiles() {
     }
 
     showLoader(false, 'consolidate-btn', 'Consolidate & Download');
+    console.log("Consolidation complete. Triggering download.");
     triggerDownload(consolidatedContent);
 }
 
@@ -279,7 +285,9 @@ function triggerDownload(content) {
     downloadLink.download = `${currentRepoInfo.repo}-consolidated.txt`;
     downloadLink.style.display = 'inline-block';
     downloadLink.textContent = `Download Consolidated File`;
-    downloadLink.click();
+
+    // Instead of a programmatic click, we make the link visible and prompt the user.
+    alert('Consolidation complete. Click the download link to save your file.');
 }
 
 
