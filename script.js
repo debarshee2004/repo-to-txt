@@ -155,6 +155,14 @@ function createTreeElement(node, owner, repo) {
     return ul;
 }
 
+// Debounce utility function
+function debounce(func, delay) {
+    let timeout;
+    return function (...args) {
+        clearTimeout(timeout);
+        timeout = setTimeout(() => func.apply(this, args), delay);
+    };
+}
 function filterFileTree() {
     const filterText = document.getElementById('extension-filter').value.toLowerCase();
     const extensions = filterText.split(',').map(ext => ext.trim()).filter(ext => ext);
